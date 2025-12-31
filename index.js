@@ -65,7 +65,7 @@ app.get('/login', async (req, res) => {
                 const payload = {idx: user.idx, id: user.id, name: user.name};
 
                 // Access Token 발급 (1시간)
-                const accessToken = jwt.sign(payload, SECRET_KEY, {expiresIn: '1h'});
+                const accessToken = jwt.sign(payload, SECRET_KEY, {expiresIn: '15m'});
 
                 // Refresh Token 발급 (14일)
                 const refreshToken = jwt.sign(payload, SECRET_KEY, {expiresIn: '14d'});
