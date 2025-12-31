@@ -49,8 +49,55 @@ app.get('/', async (req, res) => {
         resultmsg: "성공"
     });
 });
+// 회원가입
+app.post('/register', async (req, res) => {
+    const {id, pwd, name} = req.body;
+
+    // 필수 입력값 확인
+    if (!id || !pwd || !name) {
+        return res.status(400).json({
+            resultcode: "9400",
+            resultmsg: "아이디, 비밀번호, 이름을 모두 입력해주세요."
+        });
+    }
+
+    try {
+        let pool = await sql.connect(dbConfig);
+
+        // 아이디 중복 확인
+        let checkUser = await pool.request()
+        .input('id', sql.NVarChar, id)
+        .query('SELECT id FROM member WHERE id = @id');
+
+        if (checkUser.recordset.length > 0) {
+            return res.status(409).json({
+                resultcode: "9409",
+                resultmsg: "이미 존재하는 아이디입니다."
+            });
+        }
+
+        // 회원 정보 저장
+        await pool.request()
+        .input('id', sql.NVarChar, id)
+        .input('pwd', sql.NVarChar, pwd)
+        .input('name', sql.NVarChar, name)
+        .query('INSERT INTO member (id,pwd,name,reg_date) VALUES (@id,@pwd,@name,GETDATE())');
+
+        res.status(201).json({
+            resultcode: "0000",
+            resultmsg: "회원가입이 완료 되었습니다."
+        });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({
+            resultcode: "9500",
+            resultmsg: "회원가입 처리 중 오류 발생"
+        });
+    }
+});
 // 로그인
-app.get('/login', async (req, res) => {
+app.post('/login', async (req, res) => {
     const {id, pwd} = req.body;
     
     try {
@@ -97,61 +144,51 @@ app.get('/login', async (req, res) => {
     }
 });
 // 토큰 갱신: Refresh Token을 사용하여 새로운 Access Token 발급
-app.get('/refresh', async (req, res) => {
-    const {refreshToken} = req.body;
-    if (!refreshToken) {
+app.post('/refresh', async (req, res) => {
+  const { refreshToken } = req.body;
+
+  if (!refreshToken) {
+    return res.status(403).json({ resultcode: "9403", resultmsg: "리프레시 토큰이 없습니다." });
+  }
+
+  try {
+    const pool = await sql.connect(dbConfig);
+
+    const result = await pool.request()
+      .input('refreshToken', sql.NVarChar, refreshToken)
+      .query('SELECT id, name, idx FROM member WHERE refresh_token = @refreshToken');
+
+    if (result.recordset.length === 0) {
+      return res.status(403).json({ resultcode: "9403", resultmsg: "유효하지 않은 리프레시 토큰입니다." });
+    }
+
+    jwt.verify(refreshToken, SECRET_KEY, (err, decoded) => {
+      if (err) {
         return res.status(403).json({
-            resultcode: "9403",
-            resultmsg: "리프레시 토큰이 없습니다."
+          resultcode: "9403",
+          resultmsg: "리프레시 토큰이 만료되었습니다. 다시 로그인하세요."
         });
-    }
+      }
 
-    try {
-        let pool = await sql.connect(dbConfig);
+      const newAccessToken = jwt.sign(
+        { idx: decoded.idx, id: decoded.id, name: decoded.name },
+        SECRET_KEY,
+        { expiresIn: '1h' }
+      );
 
-        // DB에 해당 Refresh Token이 있는지 확인
-        let result = await pool.request()
-        .input('refreshToken', sql.NVarChar, refreshToken)
-        .query('SELECT id, name, idx FROM member WHERE refresh_token = @refreshToken');
+      return res.json({
+        resultcode: "0000",
+        resultmsg: "토큰 갱신 성공",
+        accessToken: newAccessToken
+      });
+    });
 
-        if (result.recordset.length === 0) {
-            return res.status(403).json({
-                resultcode: "9403",
-                resultmsg: "유효하지 않은 리프레시 토큰입니다."
-            })
-        }
-
-        // 토큰 유효성 및 만료 기간 검증
-        jwt.verify(refreshToken, SECRET_KEY, (err, decoded) => {
-            if (err) {
-                return res.status(403).json({
-                    resultcode: "9403",
-                    resultmsg: "리프레시 토큰이 만료되었습니다. 다시 로그인하세요."
-                });
-
-                // 검증 성공 시 새로운 Access Token 발급
-                const newAccessToken = jwt.sign(
-                    {idx: decoded.idx, id: decoded.id, name: decoded.nam},
-                    SECRET_KEY,
-                    {expiresIn: '1h'}
-                );
-
-                res.json({
-                    resultcode: "0000",
-                    resultmsg: "토큰 갱신 성공",
-                    accessToken: newAccessToken
-                });
-            }
-        });
-    } catch (err) {
-        res.status(500).json({
-            resultcode: "9500",
-            resultmsg: "토큰 갱신 중 오류 발생"
-        })
-    }
+  } catch (err) {
+    return res.status(500).json({ resultcode: "9500", resultmsg: "토큰 갱신 중 오류 발생" });
+  }
 });
-// 회원페이지
-app.get('/member', verifyToken, (req, res) => {
+// 회원전용페이지
+app.post('/member', verifyToken, (req, res) => {
     res.json({
         resultcode: "0000",
         resultmsg: "성공",
@@ -164,7 +201,7 @@ app.post('/logout', verifyToken, async (req, res) => {
     try {
             let pool = await sql.connect(dbConfig);
             await pool.request()
-            .inmput('id', sql.NVarChar, req.user.id)
+            .input('id', sql.NVarChar, req.user.id)
             .query('UPDATE member SET refresh_token = NULL WHERE id = @id');
 
             res.json({
